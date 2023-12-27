@@ -1,0 +1,246 @@
+---
+title: "Bayesian Learning Lab 2"
+author: 
+- "Shipeng Liu"
+- "Jin Yan"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+library("mvtnorm")
+library(ggplot2)
+library(readxl)
+```
+
+
+\newpage
+
+# Assignment 1
+```{r}
+mydata <- read_xlsx("Linkoping2022.xlsx")
+```
+
+## a) Test if the prior distribution is reasonable
+
+```{r}
+#construct the time matrix
+one <- rep(1,365)
+time <- c(1:365) / 365
+time_sq <- time**2
+time_matrix <- as.matrix(data.frame(one,time,time_sq))
+
+# set the values of hyperparameters
+miu_0 <- c(0,100,-100)
+omega_0 <- 0.01 * diag(3)
+nu_0 <- 1
+sigma_0_sq <- 1
+
+#simulate
+for(i in 1:4){
+  X <- rchisq(1,nu_0)
+  sigma_square <- nu_0 * sigma_0_sq / X
+  beta <- rmvnorm(1,miu_0,sigma_square * solve(omega_0))
+  beta <- as.matrix(beta)
+  temp <- time_matrix %*% t(beta) + rnorm(1,0,sqrt(sigma_square))
+  plot(time,temp,type = "l",col="blue",lwd=2,xlab = "time",ylab = "temp",main = "show the rationality of prior")
+  lines(time,mydata$temp,type = "l",col="red",lwd=2)
+}
+```
+
+### From the plot, we can see that the prior agrees my prior opinion to some degree.
+
+## b) Write a function that simulate draws from the joint posterior distribution.
+
+### Plot a histogram for each marginal posterior of the parameters.
+
+```{r}
+# calculate the parameters used in join posterior distribution
+y <- as.matrix(mydata$temp)
+n <- 365
+beta_hat <- solve(t(time_matrix) %*% time_matrix) %*% t(time_matrix) %*% y
+miu_n <- solve(t(time_matrix) %*% time_matrix + omega_0) %*% (t(time_matrix) %*% time_matrix %*% beta_hat + omega_0 %*% miu_0)
+omega_n <- t(time_matrix) %*% time_matrix + omega_0
+nu_n <- nu_0 + n
+sigma_n_sq <- (nu_0 * sigma_0_sq + (t(y) %*% y + t(miu_0) %*% omega_0 %*% miu_0 - t(miu_n) %*% omega_n %*% miu_n)) /nu_n
+sigma_n_sq <- as.numeric(sigma_n_sq)
+#simulate
+
+beta <- c()
+sigma_square <- c()
+for(i in 1:100){
+  X <- rchisq(1,nu_n)
+  sigma_square_temp <- nu_n * sigma_n_sq / X
+  beta_temp <- rmvnorm(1,miu_n,sigma_square_temp * solve(omega_n))
+  beta <- rbind(beta,beta_temp)
+  sigma_square <- c(sigma_square,sigma_square_temp)
+}
+
+#1.2.1
+
+# plot the histogram for the first beta
+hist(beta[,1],main = "Histogram of beta_1",breaks = 20)
+
+# plot the histogram for the second beta
+hist(beta[,2],main = "Histogram of beta_2",breaks = 20)
+
+# plot the histogram for the third beta
+hist(beta[,3],main = "Histogram of beta_3",breaks = 20)
+```
+
+### Make a scatter plot of the temperature data and overlay a curve for the posterior median of the function
+
+```{r}
+#1.2.2
+beta <- as.matrix(beta)
+vector_epsilon <- unlist(lapply(sqrt(sigma_square),rnorm,n=1,mean=0))
+temp <- time_matrix %*% t(beta) 
+temp <- + t(vector_epsilon + t(temp))# This is used for adding epsilon.
+temp_median <- apply(temp,1,median)
+
+temp_lower <- apply(temp,1,quantile,prob = 0.05)
+temp_upper <- apply(temp,1,quantile,prob = 0.95)
+
+plot(time,mydata$temp,col="blue",xlab = "time",ylab = "temp",main = "Show the Result of 2.b")
+lines(time,temp_upper,type = "l",col="orange",lwd=2)
+lines(time,temp_median,type = "l",col="red",lwd=2)
+lines(time,temp_lower,type = "l",col="green",lwd=2)
+```
+
+### From the graph we can see that the interval contains most of the data points, and they should do that.
+
+## c) Use the simulated draws in (b) to simulate from the posterior distribution of x tilde.
+
+```{r}
+x_tilde <- -beta[,2] /(2 * beta[,3])
+x_tilde
+```
+
+## d) Suggest a suitable piror that mitigates the potential overfitting problem.
+
+The prior should be $B_k \sim N(0,1000 * \delta^k)$
+k = [0,1,.....10] 
+$\delta$ = 0.5
+
+\newpage
+
+# Assignment 2
+```{r}
+watdata <- read.table("WomenAtWork.dat", header = TRUE)
+```
+
+## a) Consider the logistic regression model
+
+### Compute the posterior mode and J(posteriorMode) using optim
+
+```{r}
+#compute the betamode and J(betamode)
+
+Npar=dim(watdata)[2]-1
+X=as.matrix(watdata[,2:8])
+y=as.matrix(watdata[,1])
+# Select the initial values for beta
+initVal <- matrix(0,Npar,1)
+# Setting up the prior
+mu=rep(0,Npar)
+sigma=4*diag(Npar)
+
+
+LogPostLogistic <- function(betas,y,X,mu,Sigma){
+  linPred <- X%*%betas;
+  # The LogLikelihood
+  logLik <- sum( linPred*y - log(1 + exp(linPred)) );
+  # The LogPrior
+  logPrior <- dmvnorm(betas, mu, Sigma, log=TRUE);
+  # The LogPosterior=LogLikelihood+LogPrior
+  return(logLik + logPrior)
+}
+
+# The argument control is a list of options to the optimizer optim, where fnscale=-1 means that we minimize 
+# the negative log posterior. Hence, we maximize the log posterior.  
+OptimRes <- optim(initVal,LogPostLogistic,gr=NULL,y,X,mu,sigma,method=c("BFGS"),control=list(fnscale=-1),hessian=TRUE)
+
+betamode=data.frame(OptimRes$par)
+rownames(betamode)=colnames(watdata)[2:8]
+Jbetamode=solve(-OptimRes$hessian)
+
+cat('The posterior mode is:\n')
+print(betamode)
+cat("\nThe posterior covariance is:\n")
+print(Jbetamode)
+
+```
+
+### Compute an approximate 95% equal tail posterior probability interval for the regression coeffiecient to the variable NSmallChild
+
+```{r}
+nSmallChild=rmvnorm(1000,mean=OptimRes$par,sigma=Jbetamode)[,6]
+etcInterval=quantile(nSmallChild,c(0.025,0.975))
+print(etcInterval)
+```
+
+It seems this feature is of importance for the probability that a woman works,Cause the absolute coeffiecient of NSmallChild in the posterior mode is greater than other coeffiecients.And it is negative,This reveals that women with more young children at home are more likely to be home-care than work.
+
+## b) Write a function that simulate draws from the posterior predictive distribution of Pr(y = 0|x)
+
+```{r}
+draw_woman=function(drawnum,mean,sigma){
+  nparam=rmvnorm(drawnum,mean=mean,sigma=sigma)
+  ncoef=matrix(c(1,18,11,7,40,1,1))
+  res=nparam%*%ncoef
+  res=1-(exp(res)/(1+exp(res)))
+  return(res)
+}
+
+res=draw_woman(1000,OptimRes$par,Jbetamode)
+
+#plot
+res=data.frame("Prob"=res)
+
+ggplot(data=res,aes(x=Prob))+
+  geom_histogram(aes(y=..density..),binwidth=0.03,alpha=0.5)+
+  geom_density(color='red',size=0.7)+
+  labs(title='The posterior predictive distribution
+',subtitle="of Pr(y = 0|x)",tag='Fig 2.2')+
+  theme_bw()
+
+```
+
+The plot show that woman in this situation(a 40-year-old woman, with two children (4 and 7 years old), 11 years of education, 7 years of experience, and a husband with an income of 18) prone not to work.
+
+## c) Consider 13 women which all have the same features
+
+```{r}
+# Kernel density approximation
+res=draw_woman(1000,OptimRes$par,Jbetamode)
+dens=density(res)
+max_pos=which.max(dens$y)
+max_x=dens$x[max_pos]
+
+# We set the Prob of these women don't work as max_x
+binom_res=rbinom(10000, 13, max_x)
+
+#Plot
+ggplot(data=data.frame("sample"=binom_res),aes(x=sample))+
+  geom_histogram(aes(y=..density..),binwidth=1,alpha=0.5)+
+  geom_density(color='red',size=0.7,adjust=2.5)+
+  labs(title='The posterior predictive distribution for the number of women
+',subtitle='who are not working',tag='Fig 2.3')+
+  xlab("Number of women who are not working")+
+  theme_bw()
+```
+
+Of the 13 women who fit these criteria, it is most likely that 10 to 11 of them are not working.
+
+\newpage
+
+# Appendix
+
+```{r, ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
+
+
